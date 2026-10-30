@@ -5,6 +5,7 @@ const {
     getGeneratedInvoicesZip,
     getGeneratedAllInvoicesZip,
 } = require("../services/invoice.service");
+const { timeStage } = require("../utils/RequestTiming");
 const logger = require("../utils/Logger");
 
 function getRequestHostName(req) {
@@ -80,7 +81,7 @@ function renderZipDownloadError(error, req) {
             <dt>To date</dt><dd>${escapeHtml(toDate)}</dd>
         </dl>
         ${missingFilesHtml ? `<h2>Missing PDF files</h2>${missingFilesHtml}` : ""}
-        <p>Please generate the invoice PDF again or make sure the referenced PDF exists in the uploads/invoices folder.</p>
+        <p>Please generate the invoice PDF again or verify that its stored file is accessible.</p>
     </main>
 </body>
 </html>`;
@@ -89,10 +90,8 @@ function renderZipDownloadError(error, req) {
 async function generateInvoice(req, res, next) {
     try {
         const { invoiceResponse, LogoS3Url, MobileNumber, Gstin, PaymentMode, BankDetails } = req.body || {};
-        console.log("Request Protocol", req.protocol);
-        console.log("Request Headers", req.headers);
-        console.log("Request Body", req.body);
         const result = await generateInvoiceMedia({
+            timeStage: (stage, operation) => timeStage(req, res, stage, operation),
             invoiceResponse,
             logoS3Url: LogoS3Url,
             mobileNumber: MobileNumber,
@@ -101,20 +100,11 @@ async function generateInvoice(req, res, next) {
             bankDetails: BankDetails,
         });
 
-        console.log("Result: ", result);
-
+        res.setHeader("Server-Timing", Object.entries(res.locals.stageDurations || {})
+            .map(([stage, duration]) => `${stage};dur=${duration}`).join(", "));
         const protocol = isLocalRequest(req) ? "http" : "https";
 
-        const mediaUrl = `${protocol}://${req.get("host")}${result.relativeUrl}`;
-
-        logger.info("Invoice PDF generated", {
-            fileName: result.fileName,
-            invoiceId: result.invoiceId,
-            mediaUrl,
-            irn: invoiceResponse.Irn,
-            mobileNumber: MobileNumber,
-            gstin: Gstin,
-        });
+        const mediaUrl = /^https:\/\//i.test(result.relativeUrl) ? result.relativeUrl : `${protocol}://${req.get("host")}${result.relativeUrl}`;
 
         return res.status(201).json({
             status: true,
@@ -139,6 +129,8 @@ async function generateInvoice(req, res, next) {
         }
 
         next(error);
+    } finally {
+        res.locals.releaseInvoice?.();
     }
 }
 
@@ -147,7 +139,7 @@ function addMediaUrl(req, invoice) {
 
     return {
         ...invoice,
-        MediaUrl: `${protocol}://${req.get("host")}${invoice.RelativeUrl}`,
+        MediaUrl: /^https:\/\//i.test(invoice.RelativeUrl) ? invoice.RelativeUrl : `${protocol}://${req.get("host")}${invoice.RelativeUrl}`,
     };
 }
 

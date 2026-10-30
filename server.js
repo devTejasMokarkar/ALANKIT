@@ -24,6 +24,8 @@ process.env.NODE_ENV = appEnv;
 const app = require("./app");
 const { connectDB, closeConnection } = require("./src/config/database");
 const logger = require("./src/utils/Logger");
+const { invoicePdfPool } = require("./src/services/invoicePdfPool");
+const { invoiceGate } = require("./src/middleware/InvoiceGate");
 const { registrationGate } = require("./src/middleware/RegistrationGate");
 
 const port = process.env.PORT;
@@ -35,6 +37,7 @@ let shuttingDown = false;
 async function startServer() {
     try {
         await connectDB();
+        await invoicePdfPool.warm();
 
         server = app.listen(port, host, () => {
             logger.info("Server started", { url: `http://${host}:${port}` });
@@ -79,7 +82,8 @@ async function shutdown() {
                 server.closeIdleConnections();
             });
         }
-        await registrationGate.waitForIdle();
+        await Promise.all([registrationGate.waitForIdle(), invoiceGate.waitForIdle()]);
+        await invoicePdfPool.close();
         await closeConnection();
         clearTimeout(deadline);
         logger.info("Server shutdown complete");

@@ -12,7 +12,7 @@ async function timeStage(req, res, stage, operation) {
         res.locals.stageDurations[stage] = durationMs;
         res.locals.activeStage = null;
         if (durationMs >= 1000) {
-            logger.warn("Slow registration stage", {
+            logger.warn("Slow request stage", {
                 requestId: req.requestId, stage, durationMs,
                 clientDisconnected: res.destroyed && !res.writableFinished,
             });

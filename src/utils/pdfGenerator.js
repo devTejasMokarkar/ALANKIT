@@ -481,9 +481,7 @@ function drawIrnAndCustomer(doc, invoiceData, irnResponse, yOffset) {
     const leftWidth = 340;
     const rightWidth = 244;
     const seller = invoiceData.SellerDtls || {};
-    console.log("Seller Details: ", seller);
     const buyer = invoiceData.BuyerDtls || {};
-    console.log("Buyer Details: ", buyer);
 
     drawCell(doc, leftX, y, leftWidth, 13, "IRN No:", { bold: true, fontSize: 7 });
     doc.font("Helvetica").fontSize(7).fillColor("#000000").text(safeText(irnResponse.Irn), leftX + 4, y + 15, {
@@ -1122,10 +1120,8 @@ async function generateInvoicePdf({ invoiceData, irnResponse, filePath, logoS3Ur
     }
 
     const qrBuffer = await createQRCodeBuffer(irnResponse.SignedQRCode);
-    console.log("LogoS3URL: ", logoS3Url);
 
     const logoBuffer = await createLogoBuffer(logoS3Url);
-    console.log("Logo Buffer: ", logoBuffer);
 
     const measureDoc = new PDFDocument({ size: [PAGE_WIDTH, MIN_PAGE_HEIGHT], margin: PAGE_MARGIN, autoFirstPage: false });
     const headerYOffset = getHeaderYOffset(measureDoc, invoiceData, Boolean(logoBuffer));
@@ -1143,13 +1139,17 @@ async function generateInvoicePdf({ invoiceData, irnResponse, filePath, logoS3Ur
             },
         });
 
-        const stream = fs.createWriteStream(filePath);
-
-        stream.on("finish", resolve);
-        stream.on("error", () => reject(new PdfGenerationError("File write failure")));
         doc.on("error", () => reject(new PdfGenerationError("PDF generation failure")));
-
-        doc.pipe(stream);
+        if (filePath) {
+            const stream = fs.createWriteStream(filePath);
+            stream.on("finish", resolve);
+            stream.on("error", () => reject(new PdfGenerationError("File write failure")));
+            doc.pipe(stream);
+        } else {
+            const chunks = [];
+            doc.on("data", chunk => chunks.push(chunk));
+            doc.on("end", () => resolve(Buffer.concat(chunks)));
+        }
 
         doc.lineWidth(0.7).strokeColor("#000000");
         doc.rect(PAGE_MARGIN, PAGE_MARGIN, PAGE_BORDER_WIDTH, pageHeight - (PAGE_MARGIN * 2)).stroke("#000000");

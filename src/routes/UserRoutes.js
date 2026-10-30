@@ -1,3 +1,4 @@
+const { invoiceGate } = require("../middleware/InvoiceGate");
 const { Router } = require("express");
 const { validateUserDetails } = require("../middleware/ValidateUserDetails");
 const { postUserDetails, getUserDetailsByGstin, getUserDetailsByMobileNumber } = require("../controllers/UserController");
@@ -9,7 +10,7 @@ const router = Router();
 
 router.post("/user-details", validateUserDetails, registrationGate, postUserDetails);
 router.get("/user-details/mobile/:mobileNumber", getUserDetailsByMobileNumber);
-router.post("/user-details/invoice/generate", generateInvoice);
+router.post("/user-details/invoice/generate", invoiceGate, generateInvoice);
 router.get("/user-details/invoices", getInvoicesByMobileAndGstin);
 router.get("/user-details/invoices/download-zip", downloadInvoicesZip);
 router.get("/user-details/invoices/download-all-zip", downloadAllInvoicesZip);

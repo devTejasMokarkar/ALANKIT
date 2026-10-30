@@ -26,6 +26,7 @@ const invoiceSchema = new mongoose.Schema(
         InvoiceDate: { type: String, trim: true },
         TotalAmount: { type: Number, default: 0 },
         FileName: { type: String, required: true, trim: true },
+        CloudinaryPublicId: { type: String, trim: true },
         RelativeUrl: { type: String, required: true, trim: true },
         InvoiceData: { type: mongoose.Schema.Types.Mixed },
     },

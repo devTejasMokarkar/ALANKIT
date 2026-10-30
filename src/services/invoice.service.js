@@ -5,7 +5,8 @@ const Invoice = require("../models/Invoice");
 const TaxInvoice = require("../models/TaxInvoice");
 const User = require("../models/User");
 const { decodeSignedInvoice } = require("../utils/decodeSignedInvoice");
-const { generateInvoicePdf } = require("../utils/pdfGenerator");
+const { invoicePdfPool } = require("./invoicePdfPool");
+const { uploadInvoicePdf, readInvoicePdf } = require("./invoiceStorage");
 const { createZipBuffer } = require("../utils/zipGenerator");
 
 const invoiceUploadDir = path.resolve(__dirname, "..", "..", "uploads", "invoices");
@@ -155,23 +156,20 @@ function getInvoicePdfPath(invoice) {
     return path.join(invoiceUploadDir, path.basename(fileName));
 }
 
-async function generateInvoiceMedia({ invoiceResponse, logoS3Url, mobileNumber, gstin, paymentMode, bankDetails }) {
+async function generateInvoiceMedia({ invoiceResponse, logoS3Url, mobileNumber, gstin, paymentMode, bankDetails, timeStage = (_stage, operation) => operation() }) {
     validateIrnResponse(invoiceResponse);
     const invoiceOwner = validateInvoiceOwner(mobileNumber, gstin);
-    console.log("LogoS3URL: ", logoS3Url);
     const validatedLogoS3Url = validateLogoS3Url(logoS3Url);
-    console.log("validatedLogoS3Url: ", validateLogoS3Url(logoS3Url));
-    const user = await User.findOne({
+    const user = await timeStage("invoice_user_lookup", () => User.findOne({
         MobileNumber: invoiceOwner.mobileNumber,
         Gstin: invoiceOwner.gstin,
-    }, { _id: 0, id: 1, LogoS3Url: 1 }).lean();
+    }, { _id: 0, id: 1, LogoS3Url: 1 }).lean());
 
     if (!user) {
         throw new InvoiceServiceError("User details not found for this MobileNumber and Gstin", 404);
     }
 
     const invoiceData = decodeSignedInvoice(invoiceResponse.SignedInvoice);
-    console.log("Invoice Data: ", invoiceData);
 
     // Merge payment mode and bank details into PayDtls
     invoiceData.PayDtls = invoiceData.PayDtls || {};
@@ -185,24 +183,23 @@ async function generateInvoiceMedia({ invoiceResponse, logoS3Url, mobileNumber, 
         invoiceData.PayDtls.Upi = bankDetails.UPIID || invoiceData.PayDtls.Upi;
     }
 
-    await fs.mkdir(invoiceUploadDir, { recursive: true });
-
-    const timestamp = Date.now();
-    const fileName = `invoice_${timestamp}.pdf`;
-    const filePath = path.join(invoiceUploadDir, fileName);
-    const relativeUrl = `/user-details/uploads/invoices/${fileName}`;
+    const invoiceId = crypto.randomUUID();
+    const fileName = `invoice_${invoiceId}.pdf`;
 
     const finalLogoUrl = validatedLogoS3Url || user.LogoS3Url || undefined;
 
-    await generateInvoicePdf({
+    const pdfBuffer = await timeStage("invoice_pdf", () => invoicePdfPool.run({
         invoiceData,
         irnResponse: invoiceResponse,
-        filePath,
         logoS3Url: finalLogoUrl,
-    });
+    }));
 
-    const invoice = await Invoice.create({
-        InvoiceId: crypto.randomUUID(),
+    const { secureUrl, publicId } = await timeStage("invoice_cloudinary_upload", () => uploadInvoicePdf(pdfBuffer, fileName));
+    const relativeUrl = secureUrl;
+
+    const invoice = await timeStage("invoice_mongo_insert", () => Invoice.create({
+        InvoiceId: invoiceId,
+        CloudinaryPublicId: publicId,
         UserId: user.id,
         MobileNumber: invoiceOwner.mobileNumber,
         Gstin: invoiceOwner.gstin,
@@ -215,7 +212,7 @@ async function generateInvoiceMedia({ invoiceResponse, logoS3Url, mobileNumber, 
         FileName: fileName,
         RelativeUrl: relativeUrl,
         InvoiceData: invoiceData,
-    });
+    }));
 
     return {
         invoiceId: invoice.InvoiceId,
@@ -274,7 +271,7 @@ async function getGeneratedInvoicesZip(mobileNumber, gstin, fromDate, toDate) {
         }
 
         try {
-            const buffer = await fs.readFile(pdfPath);
+            const buffer = await readInvoicePdf(invoice, pdfPath);
             const displayName = sanitizeZipFileName(
                 invoice.InvoiceNo || invoice.InvoiceId,
                 path.basename(invoice.FileName, ".pdf")
@@ -359,7 +356,7 @@ async function getGeneratedAllInvoicesZip(mobileNumber, gstin, fromDate, toDate)
         }
         const pdfPath = path.join(invoiceUploadDir, path.basename(fileName));
         try {
-            const buffer = await fs.readFile(pdfPath);
+            const buffer = await readInvoicePdf(invoice, pdfPath);
             const displayName = sanitizeZipFileName(
                 invoice.InvoiceNo || invoice.InvoiceId,
                 path.basename(fileName, ".pdf")

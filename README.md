@@ -229,11 +229,75 @@ npm run lint
 
 The regression suite uses an isolated local MongoDB database and removes only that
 test database when finished. PDF-logo conversion tests require `pdftoppm` (Poppler).
-Logo images and PDF logos are processed in memory; only generated invoice PDFs use
-the existing invoice storage directories.
+Logo images and PDF logos are processed in memory. New IRN invoice PDFs are
+generated in memory and stored in Cloudinary; tax invoices still use their existing
+local storage directory.
 
 Local load-test helpers and reports under `diagnostics/` are intentionally excluded
 from Git. They are optional and are not required to run the API or regression tests.
 Dependencies, actual environment files, local database data, logs, generated uploads,
 and editor settings are ignored. Commit `.env.example` and `package-lock.json`;
 create `.env.development` or `.env.production` locally before starting the API.
+
+### Cloudinary invoice storage
+
+`POST /user-details/invoice/generate` uploads PDF bytes directly to Cloudinary as
+raw assets. Set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and
+`CLOUDINARY_API_SECRET` in the environment file used by the server, or supply
+`CLOUDINARY_URL=cloudinary://API_KEY:API_SECRET@CLOUD_NAME`. Keep these credentials
+on the server. Restart the API after changing environment settings.
+
+Successful generation returns the HTTPS Cloudinary URL in `mediaUrl`. Invoice
+metadata remains in MongoDB. New files use UUID names and are never written to
+`uploads/invoices`; upload failures return 502 without falling back to disk.
+Invoice lists and ZIP downloads support both new cloud files and existing local
+files. Existing PDFs are not migrated. The tax-invoice generation endpoint retains
+its current storage behavior.
+
+Cloudinary must allow PDF delivery in the account's Security settings. A blocked
+delivery URL must be enabled before clients or ZIP downloads can retrieve PDFs.
+Load tests include Cloudinary upload latency, bandwidth, storage, and account limits;
+HTTP 201 means both the upload and MongoDB record creation completed.
+
+Invoice generation limits concurrent operations per Node process using
+`INVOICE_MAX_INFLIGHT` (default 64). When capacity is full, new generation requests
+receive HTTP 503 with `code: INVOICE_BUSY` and `Retry-After: 1`, before any PDF or
+upload work begins. Slots remain occupied until work settles even if the client
+disconnects. This bounds the backlog; it does not guarantee a particular RPS.
+
+HTTP completion logs include `invoice_user_lookup`, `invoice_pdf`,
+`invoice_cloudinary_upload`, and `invoice_mongo_insert` durations in milliseconds.
+Use these timings to identify the slow stage before increasing concurrency or
+scaling Node processes. Full invoice payloads and PDF buffers are not logged.
+
+Successful invoice responses also include these durations in the `Server-Timing`
+header. The local invoice load-test helper reports average, p95, and max duration
+for each stage across successful requests.
+
+### Invoice PDF worker pool
+
+IRN invoice PDFs are rendered in reusable Node worker threads. The API process
+continues handling HTTP, MongoDB, and Cloudinary uploads while PDF workers run.
+The API loads all PDF workers before accepting requests to avoid worker module
+startup during the initial burst. Each worker keeps its own in-memory logo cache. No invoice PDFs are written to disk.
+Tax invoice generation retains its existing behavior.
+
+- `INVOICE_PDF_WORKERS`: defaults to available CPU parallelism minus one, capped
+  at four and never below one; set explicitly for your deployment's CPU budget.
+- `INVOICE_PDF_MAX_QUEUE`: maximum waiting PDF jobs, default 64. The separate
+  `INVOICE_MAX_INFLIGHT` limit covers the entire invoice operation.
+- `INVOICE_PDF_TIMEOUT_MS`: execution deadline per dispatched PDF job, default
+  30000 ms; queue waiting time is additional. Timed-out workers are terminated.
+
+The queue rejects excess jobs with HTTP 503, failed workers return HTTP 500, and
+PDF execution deadlines return HTTP 504. Admitted jobs are not retried automatically.
+Failed workers are replaced for subsequent work. Shutdown drains admitted invoices
+and closes worker threads, subject to the server's existing shutdown deadline.
+The `invoice_pdf` stage includes queue wait, worker startup when needed, and rendering.
+Worker count is a CPU/memory tradeoff; increasing it does not increase Cloudinary
+or MongoDB capacity. Validate sustained throughput under your actual payload.
+
+For burstier arrival patterns, tune `INVOICE_MAX_INFLIGHT` after enabling workers.
+For example, 50 requests/second with two-second request latency requires roughly
+100 concurrent slots. Use a bounded limit and monitor memory, PDF queue time,
+and Cloudinary latency; account for all processes when sizing shared services.
