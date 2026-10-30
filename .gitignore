@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Local environment and credentials (commit only the template)
+.env
+.env.*
+!.env.example
+
+# Local-only load tests, reports, MongoDB data, and Nginx runtime files
+/diagnostics/
+/.local/
+load-test*.js
+load-test*.cjs
+load-test*.mjs
+load-test-report*.json
+
+# Logs and test output
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+/coverage/
+/.nyc_output/
+
+# Generated invoices and logos; preserve empty-directory placeholders
+/uploads/**
+!/uploads/**/
+!/uploads/**/.gitkeep
+!/uploads/.gitkeep
+
+# Editor, OS, and temporary files
+/.vscode/
+/.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+/tmp/
+/temp/
